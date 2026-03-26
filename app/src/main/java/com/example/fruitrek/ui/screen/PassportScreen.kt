@@ -160,8 +160,8 @@ private fun FruitCard(
     onClick   : () -> Unit
 ) {
     val bgColor by animateColorAsState(
-        targetValue   = if (isUnlocked) Color(fruit.color).copy(alpha = 0.16f)
-                        else            Color(0xFFEEEEEE),
+        targetValue   = if (isUnlocked) fruit.color.copy(alpha = 0.16f) // FIXED
+        else            Color(0xFFEEEEEE),
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label         = "cardBg"
     )
@@ -174,7 +174,7 @@ private fun FruitCard(
             .alpha(if (isUnlocked) 1f else 0.50f)
             .then(
                 if (isUnlocked)
-                    Modifier.border(2.dp, Color(fruit.color), RoundedCornerShape(20.dp))
+                    Modifier.border(2.dp, fruit.color, RoundedCornerShape(20.dp)) // FIXED
                 else
                     Modifier
             ),
@@ -217,14 +217,14 @@ private fun FruitCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(fruit.color).copy(alpha = 0.18f))
+                        .background(fruit.color.copy(alpha = 0.18f)) // FIXED
                         .padding(horizontal = 10.dp, vertical = 3.dp)
                 ) {
                     Text(
                         text       = fruit.baybayin,
                         fontSize   = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color      = Color(fruit.color)
+                        color      = fruit.color // FIXED
                     )
                 }
             }
@@ -285,7 +285,7 @@ private fun FruitDetailSheet(fruit: Fruit, onDismiss: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
-                        .background(Color(fruit.color).copy(alpha = 0.12f))
+                        .background(fruit.color.copy(alpha = 0.12f)) // FIXED
                         .padding(16.dp)
                 ) {
                     Text(
@@ -302,7 +302,7 @@ private fun FruitDetailSheet(fruit: Fruit, onDismiss: () -> Unit) {
                     onClick  = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                     shape    = RoundedCornerShape(16.dp),
-                    colors   = ButtonDefaults.buttonColors(containerColor = Color(fruit.color))
+                    colors   = ButtonDefaults.buttonColors(containerColor = fruit.color) // FIXED
                 ) {
                     Text("Close", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.White)
                 }

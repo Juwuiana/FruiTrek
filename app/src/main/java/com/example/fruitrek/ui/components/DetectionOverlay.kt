@@ -24,9 +24,6 @@ import com.example.fruitrek.data.model.FruitCatalog
 /**
  * Transparent Canvas overlay that draws child-friendly bounding boxes
  * directly on top of the CameraX PreviewView.
- *
- * Detection coords are normalized (0.0–1.0), so we simply
- * multiply by the canvas width/height at draw time.
  */
 @Composable
 fun DetectionOverlay(
@@ -38,7 +35,8 @@ fun DetectionOverlay(
     Canvas(modifier = modifier.fillMaxSize()) {
         detections.forEach { det ->
             val fruit    = FruitCatalog.findById(det.label)
-            val boxColor = if (fruit != null) Color(fruit.color) else Color(0xFF66BB6A)
+            // FATAL FLAW FIXED: Removed the redundant Color() wrapper around fruit.color
+            val boxColor = if (fruit != null) fruit.color else Color(0xFF66BB6A)
             drawBox(det, boxColor, measurer)
         }
     }

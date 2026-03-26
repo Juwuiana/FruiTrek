@@ -47,6 +47,7 @@ import com.example.fruitrek.ui.components.CelebrationOverlay
 import com.example.fruitrek.ui.components.DetectionOverlay
 import com.example.fruitrek.ui.theme.MangoOrange
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong // <-- CRITICAL NEW IMPORT
 
 @Composable
 fun CameraScreen(
@@ -54,7 +55,6 @@ fun CameraScreen(
     onOpenPassport: () -> Unit
 ) {
     val context = LocalContext.current
-    // Use the non-deprecated import from lifecycle-runtime-compose
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val detections by viewModel.detections.collectAsState()
@@ -64,6 +64,9 @@ fun CameraScreen(
     val unlockedIds by viewModel.unlockedFruitIds.collectAsState()
 
     val executor = remember { Executors.newSingleThreadExecutor() }
+
+    // THE VALVE: Thread-safe timestamp to track the last processed frame
+    val lastAnalyzedTimestamp = remember { AtomicLong(0L) }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -87,7 +90,6 @@ fun CameraScreen(
                     val preview = Preview.Builder().build()
                     preview.setSurfaceProvider(previewView.surfaceProvider)
 
-                    // Use ResolutionSelector instead of deprecated setTargetResolution
                     val resolutionSelector = ResolutionSelector.Builder()
                         .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
                         .build()
@@ -99,9 +101,28 @@ fun CameraScreen(
                         .build()
 
                     analysis.setAnalyzer(executor) { imageProxy ->
-                        val bmp = imageProxy.toBitmap()
-                        viewModel.onNewFrame(bmp)
-                        imageProxy.close()
+                        val currentTime = System.currentTimeMillis()
+
+                        // THE THROTTLE LOGIC:
+                        // If less than 300ms has passed, drop the frame instantly to save CPU.
+                        if (currentTime - lastAnalyzedTimestamp.get() < 300) {
+                            imageProxy.close()
+                            return@setAnalyzer
+                        }
+
+                        // Update the timestamp lock
+                        lastAnalyzedTimestamp.set(currentTime)
+
+                        try {
+                            // Only perform the heavy Bitmap conversion 3 times a second
+                            val bmp = imageProxy.toBitmap()
+                            viewModel.onNewFrame(bmp)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        } finally {
+                            // CRITICAL: Always close the proxy to prevent memory leaks
+                            imageProxy.close()
+                        }
                     }
 
                     try {
@@ -147,7 +168,7 @@ fun CameraScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "${unlockedIds.size} / 8 fruits found",
+                        text = "${unlockedIds.size} / 7 fruits found",
                         color = Color.White.copy(alpha = 0.80f),
                         fontSize = 12.sp
                     )

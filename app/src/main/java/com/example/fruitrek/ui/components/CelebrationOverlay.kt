@@ -83,7 +83,7 @@ fun CelebrationOverlay(
                     .padding(24.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(36.dp))
-                    .background(Color(fruit.color).copy(alpha = 0.97f))
+                    .background(fruit.color.copy(alpha = 0.97f))
                     .padding(28.dp)
             ) {
                 Column(
