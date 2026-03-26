@@ -10,15 +10,8 @@ import java.io.FileInputStream
 import java.io.InputStreamReader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
-/**
- * Wraps TFLite Interpreter using only java.nio — zero dependency on
- * tensorflow-lite-support. The Interpreter class is loaded reflectively
- * so if the AAR is present it works; if not, isInitialized stays false
- * and detect() returns an empty list (app runs without crashing).
- */
 class FruitDetector(private val context: Context) {
 
     companion object {
@@ -29,9 +22,12 @@ class FruitDetector(private val context: Context) {
         private const val CONFIDENCE_THRESHOLD = 0.45f
         private const val IOU_THRESHOLD = 0.45f
         private const val MAX_DETECTIONS = 10
+
+        // CRITICAL FIX: Hardcoded to your exact YOLOv8 architecture to prevent tensor shape crashes
+        private const val NUM_CLASSES = 7
+        private const val NUM_ANCHORS = 2100
     }
 
-    // Hold interpreter as Any to avoid compile-time resolution of Interpreter class
     private var interpreter: Any? = null
     private var runMethod: java.lang.reflect.Method? = null
     private var closeMethod: java.lang.reflect.Method? = null
@@ -44,14 +40,14 @@ class FruitDetector(private val context: Context) {
         return try {
             val model = loadModelFile()
 
-            // Load via reflection so compiler never needs to resolve the class
             val interpreterClass = Class.forName("org.tensorflow.lite.Interpreter")
             val optionsClass = Class.forName("org.tensorflow.lite.Interpreter\$Options")
             val opts = optionsClass.getDeclaredConstructor().newInstance()
             optionsClass.getMethod("setNumThreads", Int::class.java).invoke(opts, 4)
 
+            // FATAL FLAW FIXED: TFLite expects ByteBuffer, not MappedByteBuffer in its constructor
             interpreter = interpreterClass
-                .getConstructor(MappedByteBuffer::class.java, optionsClass)
+                .getConstructor(ByteBuffer::class.java, optionsClass)
                 .newInstance(model, opts)
 
             runMethod = interpreterClass.getMethod("run", Any::class.java, Any::class.java)
@@ -59,7 +55,7 @@ class FruitDetector(private val context: Context) {
 
             labels = readLabels()
             isInitialized = true
-            Log.d(TAG, "TFLite loaded via reflection. Labels: $labels")
+            Log.d(TAG, "TFLite loaded successfully. Labels: $labels")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Init failed: ${e.message}", e)
@@ -67,17 +63,23 @@ class FruitDetector(private val context: Context) {
         }
     }
 
-    private fun loadModelFile(): MappedByteBuffer {
+    private fun loadModelFile(): ByteBuffer {
         val afd = context.assets.openFd(MODEL_FILE)
         val fis = FileInputStream(afd.fileDescriptor)
         val channel: FileChannel = fis.channel
         return channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
     }
 
-    private fun readLabels(): List<String> =
-        context.assets.open(LABELS_FILE).use { stream ->
-            BufferedReader(InputStreamReader(stream)).readLines().filter { it.isNotBlank() }
+    private fun readLabels(): List<String> {
+        return try {
+            context.assets.open(LABELS_FILE).use { stream ->
+                BufferedReader(InputStreamReader(stream)).readLines().filter { it.isNotBlank() }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read labels.txt: ${e.message}")
+            emptyList()
         }
+    }
 
     fun detect(bitmap: Bitmap): List<DetectionResult> {
         val interp = interpreter ?: return emptyList()
@@ -87,8 +89,8 @@ class FruitDetector(private val context: Context) {
         val resized = Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, true)
         val inputBuf = toByteBuffer(resized)
 
-        val anchors = 2100 // INPUT_SIZE=320 → 2100 anchors
-        val out = Array(1) { Array(4 + labels.size) { FloatArray(anchors) } }
+        // FATAL FLAW FIXED: Output tensor dimension strictly locked to model architecture (4+7=11)
+        val out = Array(1) { Array(4 + NUM_CLASSES) { FloatArray(NUM_ANCHORS) } }
 
         try {
             run.invoke(interp, inputBuf, out)
@@ -97,11 +99,12 @@ class FruitDetector(private val context: Context) {
             return emptyList()
         }
 
-        return nms(parse(out[0], anchors).sortedByDescending { it.confidence })
+        return nms(parse(out[0]).sortedByDescending { it.confidence })
     }
 
     private fun toByteBuffer(bmp: Bitmap): ByteBuffer {
-        val buf = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4)
+        // Explicitly allocate 4 bytes per float * 3 channels * width * height
+        val buf = ByteBuffer.allocateDirect(4 * 3 * INPUT_SIZE * INPUT_SIZE)
         buf.order(ByteOrder.nativeOrder())
         val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
         bmp.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
@@ -114,18 +117,27 @@ class FruitDetector(private val context: Context) {
         return buf
     }
 
-    private fun parse(out: Array<FloatArray>, anchors: Int): List<DetectionResult> {
+    private fun parse(out: Array<FloatArray>): List<DetectionResult> {
         val list = mutableListOf<DetectionResult>()
-        for (i in 0 until anchors) {
+        // Safety guard: Prevents ArrayOutOfBounds if labels.txt is missing a line
+        val validClasses = minOf(NUM_CLASSES, if (labels.isNotEmpty()) labels.size else 0)
+
+        for (i in 0 until NUM_ANCHORS) {
             val cx = out[0][i]; val cy = out[1][i]
             val w = out[2][i]; val h = out[3][i]
             var best = 0f; var cls = -1
-            for (c in labels.indices) {
-                if (out[4 + c][i] > best) { best = out[4 + c][i]; cls = c }
+
+            for (c in 0 until validClasses) {
+                if (out[4 + c][i] > best) {
+                    best = out[4 + c][i]
+                    cls = c
+                }
             }
+
             if (best >= CONFIDENCE_THRESHOLD && cls >= 0) {
+                val labelText = if (cls < labels.size) labels[cls] else "Unknown"
                 list.add(DetectionResult(
-                    label = labels[cls],
+                    label = labelText,
                     confidence = best,
                     boundingBox = RectF(
                         (cx - w / 2f).coerceIn(0f, 1f),
